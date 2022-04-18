@@ -1,0 +1,250 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r setup}
+
+knitr::opts_knit$set(root.dir = "./CollegeDocs/CSBS DAC 2022/")
+
+library(dplyr)
+library(data.table)
+library(sf)
+library(stringr)
+library(tm)
+library(haven)
+library(tmap)
+
+```
+
+# Load PPP Data
+
+```{r}
+
+PPP_data <- read.delim("./first_draw_ppp_loan_level.csv/query_20211221_082058.csv",
+                       sep = "|",
+                       header = T,
+                       fill = T) %>%
+  as.data.table()
+
+PPP_data <- PPP_data[!(borrowercity %in% c("","N/A")) & !(borrowerstate %in% c("","AE","GU","VI","AS","MP","PR")), ]
+
+PPP_data <- PPP_data[, `:=`(borrowercity = tolower(borrowercity),
+                            originatinglendercity = tolower(originatinglendercity))]
+
+PPP_data$borrowercity <- gsub("\\s*\\([^\\)]+\\)","",PPP_data$borrowercity)
+#PPP_data$borrowercity <- gsub("[[:punct:][:blank:]]+", " ", PPP_data) %>%
+ # str_trim()
+
+```
+
+# Load County Dataset
+
+```{r}
+
+county_list <- read.csv("./ZIP-COUNTY-FIPS_2018-03.csv") %>%
+  as.data.table()
+
+county_list <- county_list[, `:=`(borrowercity = tolower(CITY),
+                                  borrowerstate = STATE,
+                                  STCOUNTYFP = paste0("0",as.character(STCOUNTYFP)),
+                                  COUNTYNAME = removeWords(COUNTYNAME, "County"))]
+
+PPP_data <- PPP_data[(borrowercity %in% county_list[,borrowercity]) & (originatinglendercity %in% county_list[,borrowercity]),]
+
+setkeyv(PPP_data, c("borrowercity","borrowerstate"))
+setkeyv(county_list, c("borrowercity","borrowerstate"))
+
+PPP_data[county_list, on = c("borrowercity","borrowerstate"),
+         `:=`(borrowercounty = COUNTYNAME,
+              borrowercounty_fips = STCOUNTYFP)]
+
+```
+
+# Add County Column for Borrowers and Originating Lenders
+
+```{r}
+
+PPP_data[is.na(PPP_data)] <- 0
+
+PPP_data %>%
+  write.csv("PPP_data_update_with_FIPS.csv")
+
+```
+
+# Clean Memory
+
+```{r}
+
+county_stats <- read_dta("./PPP_data_update_with_FIPS collapsed by STATE.dta") %>%
+  as.data.table()
+
+county_stats_cb <- read_dta("./PPP_data_update_with_FIPS collapsed by STATE community banks.dta") %>%
+  as.data.table()
+
+```
+
+# Load 2019 Unemployment Data
+
+```{r}
+
+unemployment_2019 <- readxl::read_xlsx("./laucntycur14/laucnty19.xlsx")
+
+unemployment_2019$borrowerstate <- mapply(function (x) {stringr::str_trim(strsplit(x,",")[[1]][2])},
+                                  unemployment_2020$`County Name/State Abbreviation`)
+
+unemployment_2019$borrowercounty <- mapply(function (x) {tolower(strsplit(strsplit(x,",")[[1]][1], " ")[[1]][1])},
+                                   unemployment_2020$`County Name/State Abbreviation`)
+
+unemployment_2019 <- as.data.table(unemployment_2019)
+
+unemployment_2019 <- unemployment_2019[, borrowercounty_fips := paste0(`State FIPS Code`, `County FIPS Code`)]
+
+```
+
+# Load 2020 Unemployment Data
+
+```{r}
+
+unemployment_2020 <- readxl::read_xlsx("./laucntycur14/laucnty20.xlsx")
+
+unemployment_2020$borrowerstate <- mapply(function (x) {stringr::str_trim(strsplit(x,",")[[1]][2])},
+                                  unemployment_2020$`County Name/State Abbreviation`)
+
+unemployment_2020$borrowercounty <- mapply(function (x) {tolower(strsplit(strsplit(x,",")[[1]][1], " ")[[1]][1])},
+                                   unemployment_2020$`County Name/State Abbreviation`)
+
+unemployment_2020 <- as.data.table(unemployment_2020)
+
+unemployment_2020 <- unemployment_2020[, borrowercounty_fips := paste0(`State FIPS Code`, `County FIPS Code`)]
+
+```
+
+# Load Current Unemployment Data
+
+```{r}
+
+unemployment_current <- readxl::read_xlsx("./laucntycur14/laucntycurrent14.xlsx")
+
+unemployment_current$borrowerstate <- mapply(function (x) {stringr::str_trim(strsplit(x,",")[[1]][2])},
+                                  unemployment_current$`County Name/State Abbreviation`)
+
+unemployment_current$borrowercounty <- mapply(function (x) {tolower(strsplit(strsplit(x,",")[[1]][1], " ")[[1]][1])},
+                                   unemployment_current$`County Name/State Abbreviation`)
+
+unemployment_current <- as.data.table(unemployment_current)
+
+unemployment_current <- unemployment_current[, borrowercounty_fips := paste0(`State FIPS Code`, `County FIPS Code`)]
+
+unemployment_current <- unemployment_current[, .(`Unemployment Rate (%)` = mean(`Unemployment Rate (%)`)), by = borrowercounty_fips]
+
+```
+
+# Append Unemployment Data
+
+```{r}
+
+setkey(county_stats, "borrowercounty_fips")
+setkey(county_stats_cb, "borrowercounty_fips")
+
+county_stats <- county_stats[county_stats_cb, on = "borrowercounty_fips"]
+
+county_stats <- county_stats[,borrowercounty_fips := ifelse(nchar(borrowercounty_fips) == 5,
+                                                            as.character(borrowercounty_fips),
+                                                            paste0("0", borrowercounty_fips))]
+
+setkey(county_stats, "borrowercounty_fips")
+setkey(unemployment_2019, "borrowercounty_fips")
+setkey(unemployment_2020, "borrowercounty_fips")
+setkey(unemployment_current, "borrowercounty_fips")
+
+county_stats[unemployment_2019, on = "borrowercounty_fips", unemployed_2019 := `Unemployment Rate (%)`]
+county_stats[unemployment_2020, on = "borrowercounty_fips", unemployed_2020 := `Unemployment Rate (%)`]
+county_stats[unemployment_current, on = "borrowercounty_fips", unemployed_2021 := `Unemployment Rate (%)`]
+
+county_stats %>%
+  write.csv("PPP_data_by_county.csv")
+
+```
+
+
+
+```{r}
+
+county_stats <- county_stats[,  `:=`(unemployment_change_2019_2020 = unemployed_2020 - unemployed_2019,
+                                     unemployment_change_2020_curr = unemployed_2021 - unemployed_2020,
+                                     currentapprovalamount_billions = currentapprovalamount/1000000000,
+                                     currentapprovalamount_cb_billions = currentapprovalamount_cb/1000000000,
+                                     currentapprovalamount_ncb = currentapprovalamount - currentapprovalamount_cb,
+                                     currentapprovalamount_ncb_billions = (currentapprovalamount - currentapprovalamount_cb)/1000000000) ]
+
+county_stats %>%
+  write.csv("PPP_data_by_county.csv")
+
+model1 <- lm(unemployment_change_2019_2020 ~ currentapprovalamount_billions, data = county_stats)
+
+print(summary(model1))
+
+model2 <- lm(unemployment_change_2019_2020 ~ currentapprovalamount_ncb_billions, data = county_stats)
+
+print(summary(model2))
+
+model3 <- lm(unemployment_change_2019_2020 ~ currentapprovalamount_cb_billions, data = county_stats)
+
+print(summary(model3))
+
+model4 <- lm(unemployment_change_2019_2020 ~ currentapprovalamount_ncb_billions + currentapprovalamount_cb_billions, data = county_stats)
+
+print(summary(model4))
+
+```
+
+# Regress Change in Unemployment from 2020-2021 on Billions of Dollars Lent
+
+```{r}
+
+model5 <- lm(unemployment_change_2020_curr ~ currentapprovalamount_billions, data = county_stats)
+
+print(summary(model5))
+
+model6 <- lm(unemployment_change_2020_curr ~ currentapprovalamount_ncb_billions, data = county_stats)
+
+print(summary(model6))
+
+model7 <- lm(unemployment_change_2020_curr ~ currentapprovalamount_cb_billions, data = county_stats)
+
+print(summary(model7))
+
+model8 <- lm(unemployment_change_2020_curr ~ currentapprovalamount_ncb_billions + currentapprovalamount_cb_billions, data = county_stats)
+
+print(summary(model8))
+
+```
+
+
+
+```{r}
+
+county_shp <- st_read("./US_AtlasHCB_Counties/US_AtlasHCB_Counties/US_HistCounties_Shapefile/US_HistCounties.shp") %>%
+  st_transform(4326) %>%
+  select(c("FIPS", "AREA_SQMI","geometry")) %>%
+  setNames(c("borrowercounty_fips", "AREA_SQMI","geometry")) %>%
+  st_make_valid()
+  
+county_shp <- merge(county_shp, county_stats, by = "borrowercounty_fips", all.y = T)
+
+tm_shape(county_shp) +
+  tm_polygons(col = "currentapprovalamount_billions",
+              border.col = "white")
+
+```
+
+
+
+```{r}
+
+
+
+```
+
+

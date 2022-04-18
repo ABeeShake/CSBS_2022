@@ -1,0 +1,39 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r setup}
+
+knitr::opts_knit$set(root.dir = "./CollegeDocs/CSBS DAC 2022/")
+
+library(dplyr)
+library(data.table)
+library(sf)
+library(stringr)
+library(tm)
+library(haven)
+library(tmap)
+
+```
+
+# Load PPP Data
+
+```{r}
+
+PPP_data <- read.delim("",
+                       sep = "|",
+                       header = T,
+                       fill = T) %>%
+  as.data.table()
+
+PPP_data <- PPP_data[!(borrowercity %in% c("","N/A")) & !(borrowerstate %in% c("","AE","GU","VI","AS","MP","PR")), ]
+
+PPP_data <- PPP_data[, `:=`(borrowercity = tolower(borrowercity),
+                            originatinglendercity = tolower(originatinglendercity))]
+
+PPP_data$borrowercity <- gsub("\\s*\\([^\\)]+\\)","",PPP_data$borrowercity)
+#PPP_data$borrowercity <- gsub("[[:punct:][:blank:]]+", " ", PPP_data) %>%
+ # str_trim()
+
+```

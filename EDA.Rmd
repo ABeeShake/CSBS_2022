@@ -1,0 +1,191 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r setup}
+
+knitr::opts_knit$set(root.dir = "./CollegeDocs/CSBS DAC 2022/")
+
+library(ggplot2)
+library(sf)
+library(dplyr)
+library(data.table)
+library(stringr)
+
+```
+
+# Load PPP Data
+
+```{r}
+
+PPP_data <- read.delim("./first_draw_ppp_loan_level.csv/query_20211221_082058.csv",
+                       sep = "|",
+                       header = T,
+                       fill = T) %>%
+  as.data.table()
+
+PPP_data <- PPP_data[!(borrowercity %in% c("","N/A")) & !(borrowerstate %in% c("","AE","GU","VI","AS","MP","PR")), ]
+
+PPP_data <- PPP_data[, `:=`(borrowercity = tolower(borrowercity),
+                            originatinglendercity = tolower(originatinglendercity))]
+
+PPP_data$borrowercity <- gsub("\\s*\\([^\\)]+\\)","",PPP_data$borrowercity)
+#PPP_data$borrowercity <- gsub("[[:punct:][:blank:]]+", " ", PPP_data) %>%
+#  str_trim()
+
+```
+
+# Load County Dataset
+
+```{r}
+
+county_list <- read.delim("./US/US.txt",
+                          header = F) %>%
+  as.data.table()
+
+setnames(county_list, c("V3","V5","V6"), c("city","state","county"))
+
+#county_list <- county_list[,.(city,state,county)]
+
+#county_list <- county_list[, `:=`(city = tolower(city),
+                                  #county = tolower(county))]
+
+```
+
+# Descriptive Stats
+
+```{r}
+
+# Number of observations
+
+length(PPP_data)
+
+print(summary(PPP_data$currentapprovalamount %>% as.numeric()))
+
+print(dim(PPP_data %>% filter(borrowercity == "N/A" | borrowercity == "")))
+
+print(dim(PPP_data %>% filter(borrowerstate == "")))
+
+```
+
+# Add County Column for Borrowers and Originating Lenders
+
+```{r}
+
+PPP_data <- PPP_data[(borrowercity %in% county_list[,city]) & (originatinglendercity %in% county_list[,city]),]
+
+#change names for merger
+
+setnames(county_list, c("city","state"), c("borrowercity","borrowerstate"))
+
+setkeyv(PPP_data, c("borrowercity","borrowerstate"))
+
+setkeyv(county_list, c("borrowercity","borrowerstate"))
+
+PPP_data[county_list, on = c("borrowercity","borrowerstate"), borrowercounty := county]
+
+PPP_data <- PPP_data[!is.na(borrowercounty),]
+
+setnames(county_list, c("borrowercity","borrowerstate"), c("originatinglendercity","originatinglenderstate"))
+
+setkeyv(PPP_data, c("originatinglendercity","originatinglenderstate"))
+
+setkeyv(county_list, c("originatinglendercity","originatinglenderstate"))
+
+PPP_data[county_list, on = c("originatinglendercity","originatinglenderstate"), originatinglendercounty := county]
+
+PPP_data %>%
+  write.csv("PPP_data_update.csv")
+
+```
+
+# Clean Memory
+
+```{r}
+
+rm(list = c("county_list"))
+
+gc()
+
+```
+
+# Load 2020 Unemployment Data
+
+```{r}
+
+unemployment_2020 <- readxl::read_xlsx("./laucntycur14/laucnty20.xlsx")
+
+unemployment_2020$borrowerstate <- mapply(function (x) {stringr::str_trim(strsplit(x,",")[[1]][2])},
+                                  unemployment_2020$`County Name/State Abbreviation`)
+
+unemployment_2020$borrowercounty <- mapply(function (x) {tolower(strsplit(strsplit(x,",")[[1]][1], " ")[[1]][1])},
+                                   unemployment_2020$`County Name/State Abbreviation`)
+
+unemployment_2020 <- as.data.table(unemployment_2020)
+
+```
+
+# Load Current Unemployment Data
+
+```{r}
+
+unemployment_current <- readxl::read_xlsx("./laucntycur14/laucntycurrent14.xlsx")
+
+unemployment_current$borrowerstate <- mapply(function (x) {stringr::str_trim(strsplit(x,",")[[1]][2])},
+                                  unemployment_current$`County Name/State Abbreviation`)
+
+unemployment_current$borrowercounty <- mapply(function (x) {tolower(strsplit(strsplit(x,",")[[1]][1], " ")[[1]][1])},
+                                   unemployment_current$`County Name/State Abbreviation`)
+
+unemployment_current <- as.data.table(unemployment_current)
+
+```
+
+# Find the change in unemployment over time for each county
+
+```{r}
+
+PPP_data <- PPP_data[, currentapprovalamount := as.numeric(currentapprovalamount)]
+
+county_stats <- PPP_data[,.(loan_sum = sum(currentapprovalamount)), by = c("borrowercounty", "borrowerstate")]
+
+setkeyv(county_stats, c("borrowercounty","borrowerstate"))
+setkeyv(unemployment_2020, c("borrowercounty","borrowerstate"))
+setkeyv(unemployment_current, c("borrowercounty","borrowerstate"))
+
+county_stats[unemployment_2020, 
+             on = c("borrowercounty","borrowerstate"), 
+             unemploy_rate_2020 := `Unemployment Rate (%)`]
+
+county_stats[unemployment_current, 
+             on = c("borrowercounty","borrowerstate"), 
+             unemploy_rate_current := `Unemployment Rate (%)`]
+
+county_stats <- county_stats[, `:=`(unemployment_change = unemploy_rate_current - unemploy_rate_2020,
+                                    )]
+
+county_stats %>%
+  write.csv("county_stats.csv")
+
+```
+
+
+
+```{r}
+
+ggplot(data = county_stats,
+       mapping = aes(x = log(loan_sum), y = unemployment_change)) +
+  geom_point()
+
+```
+
+
+
+```{r}
+
+covid_data <- read.csv("./covid_counties.csv")
+
+
+
+```
