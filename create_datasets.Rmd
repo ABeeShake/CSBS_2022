@@ -225,11 +225,7 @@ print(summary(model8))
 
 ```{r}
 
-county_shp <- st_read("./US_AtlasHCB_Counties/US_AtlasHCB_Counties/US_HistCounties_Shapefile/US_HistCounties.shp") %>%
-  st_transform(4326) %>%
-  select(c("FIPS", "AREA_SQMI","geometry")) %>%
-  setNames(c("borrowercounty_fips", "AREA_SQMI","geometry")) %>%
-  st_make_valid()
+county_shp <- st_read("./US_AtlasHCB_Counties/US_AtlasHCB_Counties/US_HistCounties_Shapefile/US_HistCounties.shp") 
   
 county_shp <- merge(county_shp, county_stats, by = "borrowercounty_fips", all.y = T)
 

@@ -9,11 +9,7 @@ knitr::opts_knit$set(root.dir = "./CollegeDocs/CSBS DAC 2022/")
 
 library(dplyr)
 library(data.table)
-library(sf)
-library(stringr)
-library(tm)
-library(haven)
-library(tmap)
+library(ggplot2)
 
 ```
 
@@ -21,19 +17,78 @@ library(tmap)
 
 ```{r}
 
-PPP_data <- read.delim("",
-                       sep = "|",
+PPP_data <- read.delim("./PPP_data_update_with_FIPS.csv",
+                       sep = ",",
                        header = T,
                        fill = T) %>%
   as.data.table()
 
-PPP_data <- PPP_data[!(borrowercity %in% c("","N/A")) & !(borrowerstate %in% c("","AE","GU","VI","AS","MP","PR")), ]
+PPP_data[, naicscode2 := substr(as.character(naicscode), 1, 2)]
 
-PPP_data <- PPP_data[, `:=`(borrowercity = tolower(borrowercity),
-                            originatinglendercity = tolower(originatinglendercity))]
+```
 
-PPP_data$borrowercity <- gsub("\\s*\\([^\\)]+\\)","",PPP_data$borrowercity)
-#PPP_data$borrowercity <- gsub("[[:punct:][:blank:]]+", " ", PPP_data) %>%
- # str_trim()
 
+
+```{r}
+
+cb_vs_ncb <- PPP_data[,
+         .(loan_count = .N,
+           loan_sum = sum(currentapprovalamount),
+           forgiven_count = lapply(.SD, function(x) sum(as.logical(x))),
+           forgiven_sum = sum(forgivenessamount)
+         ),
+         by = .(borrowercounty_fips, cb),
+         .SDcols = "forgivenessamount"]
+
+cb_vs_ncb[, forgiven_count := unlist(forgiven_count)]
+
+cb_vs_ncb[, `:=`(forgiven_frac = forgiven_count/loan_count,
+                 unforgiven_frac = (loan_count - forgiven_count)/loan_count)]
+
+loans_by_industry <- PPP_data[,
+         .(loan_count = .N),
+         by = .(naicscode2, cb)]
+
+```
+
+
+
+```{r}
+
+ggplot(data = loans_by_industry, mapping = aes(x = as.factor(naicscode), y = loan_count)) +
+  geom_bar(aes(fill = as.factor(cb)),
+           position = "dodge",
+           stat = "identity")
+
+```
+
+
+
+```{r}
+
+cb_vs_ncb %>%
+  write.csv("cb_stats_by_county.csv")
+
+loans_by_industry %>%
+  write.csv("loans_by_industry.csv")
+
+```
+
+
+
+```{r}
+
+forgiveness_pct <- PPP_data[,
+         .(loan_count = .N,
+           forgiven_count = lapply(.SD, function(x) sum(as.logical(x)))),
+         by = cb,
+         .SDcols = "forgivenessamount"]
+
+forgiveness_pct[, forgiven_count := unlist(forgiven_count)]
+
+forgiveness_pct[, forgiven_frac := forgiven_count/loan_count]
+
+
+forgiveness_pct %>%
+  write.csv("forgiveness_pct.csv")
 ```
